@@ -1,0 +1,79 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Prepare Android project
+        run: |
+          set -e
+          flutter create --platforms=android --org com.schoolmanager --project-name school_manager /tmp/gen
+          rm -rf android
+          cp -r /tmp/gen/android ./android
+
+          mkdir -p lib
+          for f in *.dart; do
+            if [ -e "$f" ]; then mv "$f" lib/; fi
+          done
+
+          RES=android/app/src/main/res
+          rm -rf "$RES"/mipmap-anydpi*
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p "$RES/mipmap-$d"
+            cp "ic_$d.png" "$RES/mipmap-$d/ic_launcher.png"
+          done
+
+          sed -i 's/android:label="[^"]*"/android:label="School Manager"/' android/app/src/main/AndroidManifest.xml
+
+          MA=$(find android/app/src/main -name MainActivity.kt | head -n 1)
+          if [ -z "$MA" ]; then
+            echo "ERROR: MainActivity.kt was not found"
+            exit 1
+          fi
+          PKG=$(grep -m1 '^package ' "$MA")
+          { echo "$PKG"; echo; cat main_activity_body.kt.txt; } > "$MA"
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Rename APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk school_manager.apk
+
+      - name: Save APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: school-manager-apk
+          path: school_manager.apk
+
+      - name: Publish APK in Releases
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: School Manager build ${{ github.run_number }}
+          files: school_manager.apk
